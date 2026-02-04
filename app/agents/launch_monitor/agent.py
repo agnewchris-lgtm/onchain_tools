@@ -12,6 +12,7 @@ import httpx
 from ..base import BaseAgent
 from ...config import settings
 from ...logging_config import logger
+from ...services.buyer import BuyService, BuyResult
 
 
 class LaunchConfig:
@@ -36,11 +37,16 @@ class TelegramService:
         self.chat_id = chat_id
         self.enabled = bool(bot_token and chat_id)
     
-    async def send_message(self, message: str, image_url: str | None = None) -> bool:
-        """Send message to Telegram"""
+    async def send_message(
+        self,
+        message: str,
+        image_url: str | None = None,
+        reply_markup: dict | None = None,
+    ) -> dict | None:
+        """Send message to Telegram. Returns the sent message object or None."""
         if not self.enabled:
             logger.debug("Telegram not configured, skipping notification")
-            return False
+            return None
         
         try:
             url = f"https://api.telegram.org/bot{self.bot_token}"
@@ -49,6 +55,9 @@ class TelegramService:
                 "chat_id": self.chat_id,
                 "parse_mode": "HTML",
             }
+            
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
             
             # Send photo with caption or text message
             if image_url:
@@ -66,14 +75,14 @@ class TelegramService:
                 
                 if result.get("ok"):
                     logger.info("✅ Telegram message sent successfully")
-                    return True
+                    return result.get("result")
                 else:
                     logger.error(f"❌ Telegram error: {result.get('description', 'Unknown')}")
-                    return False
+                    return None
                     
         except Exception as e:
             logger.error(f"❌ Telegram send failed: {e}")
-            return False
+            return None
     
     @staticmethod
     def _esc(text: str) -> str:
@@ -86,6 +95,55 @@ class TelegramService:
             .replace('"', "&quot;")
         )
     
+    async def answer_callback(self, callback_id: str, text: str = "", alert: bool = False) -> None:
+        """Acknowledge a callback query."""
+        if not self.enabled:
+            return
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/answerCallbackQuery"
+            payload: dict[str, Any] = {"callback_query_id": callback_id}
+            if text:
+                payload["text"] = text
+                payload["show_alert"] = alert
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(url, json=payload)
+        except Exception as e:
+            logger.error(f"answerCallbackQuery failed: {e}")
+
+    async def remove_buttons(self, chat_id: int | str, message_id: int) -> None:
+        """Remove inline keyboard from a message."""
+        if not self.enabled:
+            return
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/editMessageReplyMarkup"
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(url, json={
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "reply_markup": {"inline_keyboard": []},
+                })
+        except Exception as e:
+            logger.error(f"removeButtons failed: {e}")
+
+    async def send_reply(self, chat_id: int | str, text: str, reply_to: int | None = None) -> None:
+        """Send a plain text reply."""
+        if not self.enabled:
+            return
+        try:
+            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            payload: dict[str, Any] = {
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            }
+            if reply_to:
+                payload["reply_to_message_id"] = reply_to
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(url, json=payload)
+        except Exception as e:
+            logger.error(f"sendReply failed: {e}")
+
     def format_token_message(self, token: dict) -> tuple[str, str | None]:
         """Format token data as Telegram message"""
         base_sym = self._esc(token.get("base_symbol", "UNKNOWN"))
@@ -370,19 +428,25 @@ class LaunchMonitorAgent(BaseAgent):
             bot_token=getattr(settings, "telegram_bot_token", None),
             chat_id=getattr(settings, "telegram_chat_id", None)
         )
+        self.buyer = BuyService()
         self._monitoring = False
+        self._polling = False
         self._cache_ttl = (self.config.LOOKBACK_HOURS * 60 * 60) + 300
+        self._buy_amount = getattr(settings, "buy_amount_usd", 50.0)
         
     async def on_start(self) -> None:
         logger.info("LaunchMonitorAgent starting...")
         logger.info(f"Using Redis cache with TTL: {self._cache_ttl}s ({self._cache_ttl/3600:.1f} hours)")
         # Start monitoring loop
         self._monitoring = True
+        self._polling = True
         asyncio.create_task(self._monitor_loop())
+        asyncio.create_task(self._callback_poll_loop())
         
     async def on_stop(self) -> None:
         logger.info("LaunchMonitorAgent stopping...")
         self._monitoring = False
+        self._polling = False
         
     async def _is_seen(self, chain: str, pair_id: str) -> bool:
         """Check if token pair has been seen (using Redis cache with TTL)"""
@@ -413,6 +477,91 @@ class LaunchMonitorAgent(BaseAgent):
             
             # Wait for next poll
             await asyncio.sleep(self.config.POLL_SECONDS)
+
+    # ── Telegram callback handling ────────────────────────────────────
+
+    async def _callback_poll_loop(self) -> None:
+        """Long-poll Telegram for inline button callbacks."""
+        if not self.telegram.enabled:
+            logger.info("Telegram not configured, callback polling disabled")
+            return
+
+        logger.info("📡 Telegram callback polling started")
+        offset = 0
+
+        while self._polling:
+            try:
+                url = f"https://api.telegram.org/bot{self.telegram.bot_token}/getUpdates"
+                params = {
+                    "offset": offset,
+                    "timeout": 30,
+                    "allowed_updates": json.dumps(["callback_query"]),
+                }
+                async with httpx.AsyncClient(timeout=35.0) as client:
+                    resp = await client.get(url, params=params)
+                    data = resp.json()
+
+                if data.get("ok") and data.get("result"):
+                    for update in data["result"]:
+                        offset = update["update_id"] + 1
+                        cb = update.get("callback_query")
+                        if cb:
+                            asyncio.create_task(self._handle_buy_callback(cb))
+            except httpx.ReadTimeout:
+                continue  # Normal for long-poll
+            except Exception as e:
+                logger.error(f"Callback poll error: {e}")
+                await asyncio.sleep(5)
+
+    async def _handle_buy_callback(self, cb: dict) -> None:
+        """Process a buy button click."""
+        cb_id = cb.get("id", "")
+        cb_data = cb.get("data", "")
+        msg = cb.get("message", {})
+        chat_id = msg.get("chat", {}).get("id")
+        message_id = msg.get("message_id")
+
+        if not cb_data.startswith("buy:"):
+            await self.telegram.answer_callback(cb_id, "❓ Unknown action")
+            return
+
+        parts = cb_data.split(":", 2)
+        if len(parts) != 3:
+            await self.telegram.answer_callback(cb_id, "❌ Bad button data")
+            return
+
+        _, chain, token_address = parts
+
+        if not self.buyer.is_configured(chain):
+            await self.telegram.answer_callback(
+                cb_id, f"⚠️ No wallet configured for {chain.upper()}", alert=True,
+            )
+            return
+
+        # Acknowledge immediately
+        await self.telegram.answer_callback(cb_id, f"⏳ Buying ${self._buy_amount:.0f} on {chain.upper()}…")
+
+        # Remove button to prevent double-clicks
+        if chat_id and message_id:
+            await self.telegram.remove_buttons(chat_id, message_id)
+
+        # Execute the buy
+        logger.info(f"🛒 Buy triggered: ${self._buy_amount} of {token_address[:12]}… on {chain}")
+        result = await self.buyer.buy(chain, token_address, self._buy_amount)
+
+        # Send result as reply
+        if result.success:
+            text = (
+                f"✅ <b>Buy executed!</b>\n\n"
+                f"💰 <b>Amount:</b> ${result.amount_usd:.0f}\n"
+                f"⛓ <b>Chain:</b> {result.chain.upper()}\n"
+                f"🔗 <a href=\"{result.explorer_url}\">View Transaction</a>"
+            )
+        else:
+            text = f"❌ <b>Buy failed</b>\n\n<code>{result.error}</code>"
+
+        if chat_id:
+            await self.telegram.send_reply(chat_id, text, reply_to=message_id)
     
     async def _fetch_json(self, url: str) -> dict | list | None:
         """Fetch JSON from URL with retry"""
@@ -658,7 +807,20 @@ class LaunchMonitorAgent(BaseAgent):
                     message, image = self.telegram.format_token_message(token_data)
                     logger.info(f"Telegram HTML:\n{message}")
                     logger.info(f"Twitter URL: {twitter_url!r} | Dex URL: {token_data['dex_url']!r} | Image: {image!r}")
-                    await self.telegram.send_message(message, image)
+                    
+                    # Build buy button if wallet is configured for this chain
+                    reply_markup = None
+                    base_token_address = pair.get("baseToken", {}).get("address", "")
+                    if base_token_address and self.buyer.is_configured(chain):
+                        cb_data = f"buy:{chain}:{base_token_address}"
+                        reply_markup = {
+                            "inline_keyboard": [[{
+                                "text": f"💰 Buy ${self._buy_amount:.0f}",
+                                "callback_data": cb_data,
+                            }]]
+                        }
+                    
+                    await self.telegram.send_message(message, image, reply_markup=reply_markup)
                 
                 # Publish to message queue
                 await self.mq.publish(self.publish_channel, {

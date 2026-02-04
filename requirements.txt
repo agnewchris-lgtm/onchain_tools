@@ -9,3 +9,7 @@ websockets>=12.0
 httpx>=0.27
 requests>=2.31
 aiohttp>=3.9
+# Buyer dependencies
+solders>=0.21.0
+web3>=7.0
+base58>=2.1

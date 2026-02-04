@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     telegram_chat_id: str | None = Field(default=None)
     enable_telegram: bool = Field(default=True)
 
+    # Buyer
+    solana_private_key: str | None = Field(default=None)
+    evm_private_key: str | None = Field(default=None)
+    buy_amount_usd: float = Field(default=50.0)
+    solana_rpc_url: str = Field(default="https://api.mainnet-beta.solana.com")
+
     model_config = SettingsConfigDict(env_file=".env", env_prefix="", extra="allow")
 
 

@@ -75,20 +75,30 @@ class TelegramService:
             logger.error(f"❌ Telegram send failed: {e}")
             return False
     
+    @staticmethod
+    def _esc(text: str) -> str:
+        """Escape HTML special characters in user content"""
+        return (
+            str(text)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+        )
+    
     def format_token_message(self, token: dict) -> tuple[str, str | None]:
         """Format token data as Telegram message"""
-        base_sym = token.get("base_symbol", "UNKNOWN")
-        quote_sym = token.get("quote_symbol", "?")
-        chain = token.get("chain", "").upper()
+        base_sym = self._esc(token.get("base_symbol", "UNKNOWN"))
+        quote_sym = self._esc(token.get("quote_symbol", "?"))
+        chain = self._esc(token.get("chain", "").upper())
         liquidity = token.get("liquidity_usd", 0)
         price = token.get("price_usd")
         market_cap = token.get("market_cap", 0)
         volume = token.get("volume_24h")
         age = token.get("age_minutes")
-        twitter_url = token.get("twitter_url")
+        twitter_url = token.get("twitter_url", "")
         followers = token.get("twitter_followers")
         dex_url = token.get("dex_url", "")
-        pair_id = token.get("pair_id", "")
+        pair_id = self._esc(token.get("pair_id", ""))
         
         message = f"🚀 <b>NEW TOKEN ALERT</b> 🚀\n\n"
         message += f"<b>{base_sym}/{quote_sym}</b>\n"
@@ -117,12 +127,16 @@ class TelegramService:
         message += f"\n"
         
         if twitter_url:
-            message += f"🐦 <a href=\"{twitter_url}\">Twitter/X</a>"
+            safe_twitter = self._esc(twitter_url)
+            message += f'🐦 <a href="{safe_twitter}">Twitter/X</a>'
             if followers:
                 message += f" ({followers:,} followers)"
             message += "\n"
         
-        message += f"📈 <a href=\"{dex_url}\">View on DexScreener</a>\n"
+        if dex_url:
+            safe_dex = self._esc(dex_url)
+            message += f'📈 <a href="{safe_dex}">View on DexScreener</a>\n'
+        
         message += f"\n<code>{pair_id}</code>"
         
         # Get token image if available

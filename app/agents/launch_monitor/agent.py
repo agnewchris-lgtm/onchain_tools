@@ -126,12 +126,31 @@ class TelegramService:
         
         message += f"\n"
         
-        if twitter_url:
+        # Twitter/X profile section
+        profile = token.get("twitter_profile")
+        if profile and twitter_url:
+            tw_user = self._esc(profile.get("username", ""))
+            tw_name = self._esc(profile.get("name", ""))
+            tw_bio = self._esc(profile.get("bio", ""))
+            safe_twitter = self._esc(twitter_url)
+            
+            message += f'🐦 <a href="{safe_twitter}"><b>@{tw_user}</b></a>'
+            if tw_name and tw_name != tw_user:
+                message += f" ({tw_name})"
+            if followers:
+                message += f" • {followers:,} followers"
+            message += "\n"
+            
+            if tw_bio:
+                message += f"<i>{tw_bio}</i>\n"
+        elif twitter_url:
             safe_twitter = self._esc(twitter_url)
             message += f'🐦 <a href="{safe_twitter}">Twitter/X</a>'
             if followers:
                 message += f" ({followers:,} followers)"
             message += "\n"
+        
+        message += "\n"
         
         if dex_url:
             safe_dex = self._esc(dex_url)
@@ -139,8 +158,10 @@ class TelegramService:
         
         message += f"\n<code>{pair_id}</code>"
         
-        # Get token image if available
-        image_url = None  # Could extract from pair data if needed
+        # Use banner or profile pic as the photo
+        image_url = None
+        if profile:
+            image_url = profile.get("banner_url") or profile.get("profile_image_url") or None
         
         return message, image_url
 
@@ -175,10 +196,14 @@ class TwitterService:
                     return username
         return None
     
-    async def get_followers(self, username: str) -> int | None:
-        """Fetch follower count for a Twitter user"""
+    async def get_profile(self, username: str) -> dict | None:
+        """Fetch full Twitter profile for a user.
+        
+        Returns dict with keys: followers, username, name, bio, 
+        profile_image_url, banner_url (or None on failure).
+        """
         if not self.api_key or self.api_key == "YOUR_TWITTERAPI_KEY_HERE":
-            logger.debug("TwitterAPI key not configured, skipping follower count")
+            logger.debug("TwitterAPI key not configured, skipping profile fetch")
             return None
         
         try:
@@ -205,14 +230,28 @@ class TwitterService:
                     return None
                 
                 if result and result.get("data"):
-                    followers = result["data"].get("followers", 0)
+                    data = result["data"]
+                    followers = data.get("followers", 0)
                     logger.info(f"@{username} has {followers:,} followers")
-                    return followers
+                    
+                    # Get high-res profile image (replace _normal with _400x400)
+                    pfp = data.get("profileImageUrl") or data.get("avatar") or ""
+                    if pfp:
+                        pfp = pfp.replace("_normal.", "_400x400.")
+                    
+                    return {
+                        "followers": followers,
+                        "username": data.get("userName") or data.get("screenName") or username,
+                        "name": data.get("name") or "",
+                        "bio": data.get("description") or data.get("bio") or "",
+                        "profile_image_url": pfp,
+                        "banner_url": data.get("profileBannerUrl") or data.get("coverImageUrl") or "",
+                    }
                 
                 return None
                 
         except Exception as e:
-            logger.warning(f"Failed to fetch followers for @{username}: {e}")
+            logger.warning(f"Failed to fetch profile for @{username}: {e}")
             return None
 
 
@@ -468,12 +507,15 @@ class LaunchMonitorAgent(BaseAgent):
                 if self.config.REQUIRE_TWITTER and not twitter_url:
                     continue
                 
-                # Fetch Twitter followers
+                # Fetch Twitter profile
                 followers = None
+                twitter_profile = None
                 if twitter_url:
                     username = self.twitter.extract_username(twitter_url)
                     if username:
-                        followers = await self.twitter.get_followers(username)
+                        twitter_profile = await self.twitter.get_profile(username)
+                        if twitter_profile:
+                            followers = twitter_profile.get("followers")
                         
                         if (self.config.MIN_TWITTER_FOLLOWERS > 0 and 
                             (followers is None or followers < self.config.MIN_TWITTER_FOLLOWERS)):
@@ -493,6 +535,7 @@ class LaunchMonitorAgent(BaseAgent):
                     "volume_24h": pair.get("volume", {}).get("h24"),
                     "twitter_url": twitter_url,
                     "twitter_followers": followers,
+                    "twitter_profile": twitter_profile,
                     "dex_url": pair.get("url") or f"https://dexscreener.com/{chain}/{pair_id}",
                     "created_at": datetime.fromtimestamp(created_ms / 1000).isoformat() if created_ms else None,
                     "age_minutes": int((now - created_ms) / 60000) if created_ms else None,

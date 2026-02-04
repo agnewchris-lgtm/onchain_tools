@@ -546,6 +546,8 @@ class LaunchMonitorAgent(BaseAgent):
                 # Send Telegram notification
                 if self.telegram.enabled and getattr(settings, "enable_telegram", True):
                     message, image = self.telegram.format_token_message(token_data)
+                    logger.info(f"Telegram HTML:\n{message}")
+                    logger.info(f"Twitter URL: {twitter_url!r} | Dex URL: {token_data['dex_url']!r} | Image: {image!r}")
                     await self.telegram.send_message(message, image)
                 
                 # Publish to message queue

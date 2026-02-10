@@ -245,6 +245,12 @@ class TelegramService:
                 message += f" ({followers:,} followers)"
             message += f"\n{twitter_url}\n"
         
+        # Red flags section
+        red_flags = token.get("red_flags", [])
+        if red_flags:
+            message += RedFlagDetector.format_flags(red_flags)
+            message += "\n"
+        
         message += "\n"
         
         if dex_url:
@@ -429,6 +435,59 @@ class RugCheckService:
                 risk_strs.append(f"{r_emoji} {name}")
             lines.append("\n".join(risk_strs))
         
+        return "\n".join(lines)
+
+
+class RedFlagDetector:
+    """Detects rug pull red flags from token social/website data"""
+
+    # X Communities URL pattern - anyone can create in seconds, zero credibility
+    COMMUNITY_PATTERN = re.compile(r"x\.com/i/(communities|trending)/", re.IGNORECASE)
+    # Parasitic tweet pattern - linking someone else's tweet as "social proof"
+    TWEET_STATUS_PATTERN = re.compile(r"(?:x|twitter)\.com/([^/]+)/status/\d+", re.IGNORECASE)
+    # YouTube as "website" - absolute minimum effort
+    YOUTUBE_PATTERN = re.compile(r"(youtube\.com|youtu\.be)", re.IGNORECASE)
+
+    @classmethod
+    def detect(cls, twitter_url: str | None, twitter_profile: dict | None,
+               website_url: str | None, token_name: str = "") -> list[tuple[str, str]]:
+        """Detect red flags. Returns list of (flag_description, severity).
+        Severity: 'danger' or 'warn'.
+        """
+        flags: list[tuple[str, str]] = []
+
+        # 1. Twitter is an X Community link (not a real account)
+        if twitter_url and cls.COMMUNITY_PATTERN.search(twitter_url):
+            flags.append(("X Community link (not a real account)", "danger"))
+
+        # 2. Twitter links to someone else's tweet (parasitic social proof)
+        elif twitter_url and twitter_profile:
+            match = cls.TWEET_STATUS_PATTERN.search(twitter_url)
+            if match:
+                linked_username = match.group(1).lower()
+                profile_username = (twitter_profile.get("username") or "").lower()
+                # If the linked tweet is from a different user than the token's "own" profile
+                # OR if the profile has way more followers than expected for a new token
+                if profile_username and linked_username != profile_username:
+                    flags.append((f"Links @{match.group(1)}'s tweet as social proof", "danger"))
+                elif not profile_username:
+                    flags.append(("Links external tweet (no own account)", "warn"))
+
+        # 3. "Website" is a YouTube link
+        if website_url and cls.YOUTUBE_PATTERN.search(website_url):
+            flags.append(("Website is a YouTube link", "danger"))
+
+        return flags
+
+    @classmethod
+    def format_flags(cls, flags: list[tuple[str, str]]) -> str:
+        """Format red flags for Telegram message"""
+        if not flags:
+            return ""
+        lines = ["\n🚩 <b>RED FLAGS:</b>"]
+        for desc, severity in flags:
+            emoji = "🔴" if severity == "danger" else "🟡"
+            lines.append(f"  {emoji} {desc}")
         return "\n".join(lines)
 
 
@@ -800,6 +859,15 @@ class LaunchMonitorAgent(BaseAgent):
                     if token_address:
                         rug_summary = await self.rugcheck.get_summary(token_address)
                 
+                # Detect red flags
+                website_url = self._has_website(pair)
+                red_flags = RedFlagDetector.detect(
+                    twitter_url=twitter_url,
+                    twitter_profile=twitter_profile,
+                    website_url=website_url,
+                    token_name=base_sym,
+                )
+
                 token_data = {
                     "pair_id": pair_id,
                     "chain": chain,
@@ -813,6 +881,7 @@ class LaunchMonitorAgent(BaseAgent):
                     "twitter_followers": followers,
                     "twitter_profile": twitter_profile,
                     "rug_check": rug_summary,
+                    "red_flags": red_flags,
                     "dex_url": pair.get("url") or f"https://dexscreener.com/{chain}/{pair_id}",
                     "created_at": datetime.fromtimestamp(created_ms / 1000).isoformat() if created_ms else None,
                     "age_minutes": int((now - created_ms) / 60000) if created_ms else None,

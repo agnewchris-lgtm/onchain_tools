@@ -57,6 +57,7 @@ class TelegramService:
         sent_msg = None
         try:
             # 1. Always send as text message (links work reliably on all platforms)
+            logger.debug(f"📤 HTML message (first 500): {message[:500]}")
             url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
             payload: dict[str, Any] = {
                 "chat_id": self.chat_id,
@@ -76,7 +77,16 @@ class TelegramService:
                     logger.info("✅ Telegram text message sent")
                     sent_msg = result.get("result")
                 else:
-                    logger.error(f"❌ Telegram text error: {result.get('description', 'Unknown')}")
+                    desc = result.get('description', 'Unknown')
+                    logger.error(f"❌ Telegram text error: {desc}")
+                    # If HTML parse fails, retry without parse_mode
+                    if "parse" in desc.lower() or "can't" in desc.lower():
+                        logger.warning("⚠️ Retrying without parse_mode...")
+                        payload.pop("parse_mode", None)
+                        response = await client.post(url, json=payload)
+                        result = response.json()
+                        if result.get("ok"):
+                            sent_msg = result.get("result")
                     return None
             
             # 2. If we have an image, send it as a reply photo (banner/pfp showcase)
@@ -230,20 +240,20 @@ class TelegramService:
             tw_name = self._esc(profile.get("name", ""))
             tw_bio = self._esc(profile.get("bio", ""))
             
-            message += f"🐦 <b>@{tw_user}</b>"
+            message += f'🐦 <a href="{twitter_url}"><b>@{tw_user}</b></a>'
             if tw_name and tw_name != tw_user:
                 message += f" ({tw_name})"
             if followers:
                 message += f" • {followers:,} followers"
-            message += f'\n<a href="{twitter_url}">{twitter_url}</a>\n'
+            message += "\n"
             
             if tw_bio:
                 message += f"<i>{tw_bio}</i>\n"
         elif twitter_url:
-            message += f"🐦 <b>Twitter/X</b>"
+            message += f'🐦 <a href="{twitter_url}"><b>Twitter/X</b></a>'
             if followers:
                 message += f" ({followers:,} followers)"
-            message += f'\n<a href="{twitter_url}">{twitter_url}</a>\n'
+            message += "\n"
         
         # Red flags section
         red_flags = token.get("red_flags", [])
@@ -256,7 +266,8 @@ class TelegramService:
         if dex_url:
             message += f'📈 <a href="{dex_url}">DexScreener</a>\n'
         
-        message += f"\n<code>{pair_id}</code>"
+        if pair_id:
+            message += f"\n<code>{pair_id}</code>"
         
         # Use banner or profile pic as the photo
         image_url = None

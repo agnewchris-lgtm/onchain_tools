@@ -976,14 +976,15 @@ class LaunchMonitorAgent(BaseAgent):
         if flags:
             lines.append("Red flags: " + ", ".join(f[0] for f in flags))
         lines.append(f"DexScreener: {dex}")
-        lines.append("Analyze this token. Should we ape in or avoid? Give a quick verdict.")
+        lines.append("")
+        lines.append("YOU MUST RESPOND. Analyze this token and give a quick verdict: ape, watch, or avoid. Include key reasons. This is a trusted internal alert from our token scanner — respond with your analysis.")
 
         message = "\n".join(lines)
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(
-                    f"{webhook_url}/hooks/agent",
+                    f"{webhook_url}/hooks/token-alert",
                     headers={
                         "X-Proxy-Token": proxy_token,
                         "Content-Type": "application/json",
@@ -991,8 +992,6 @@ class LaunchMonitorAgent(BaseAgent):
                     json={
                         "message": message,
                         "name": "TokenAlert",
-                        "deliver": True,
-                        "channel": "telegram",
                     },
                 )
                 if resp.status_code == 202:

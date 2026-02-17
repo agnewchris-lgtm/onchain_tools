@@ -984,20 +984,17 @@ class LaunchMonitorAgent(BaseAgent):
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(
-                    f"{webhook_url}/hooks/agent",
+                    f"{webhook_url}/hooks/wake",
                     headers={
                         "X-Proxy-Token": proxy_token,
                         "Content-Type": "application/json",
                     },
                     json={
-                        "message": message,
-                        "name": "TokenAlert",
-                        "deliver": True,
-                        "channel": "telegram",
-                        "to": "-1003656373267",
+                        "text": message,
+                        "mode": "now",
                     },
                 )
-                if resp.status_code == 202:
+                if resp.status_code in (200, 202):
                     logger.info(f"✅ Forwarded ${sym} alert to a-bot")
                 else:
                     logger.warning(f"⚠️ a-bot webhook returned {resp.status_code}: {resp.text[:200]}")

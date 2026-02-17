@@ -926,6 +926,9 @@ class LaunchMonitorAgent(BaseAgent):
                     
                     await self.telegram.send_message(message, image, reply_markup=reply_markup)
                 
+                # Forward to a-bot via webhook
+                await self._forward_to_abot(token_data)
+
                 # Publish to message queue
                 await self.mq.publish(self.publish_channel, {
                     "type": "new_token",
@@ -942,6 +945,63 @@ class LaunchMonitorAgent(BaseAgent):
         
         logger.info(f"✅ Scan finished: {datetime.now()}")
     
+    async def _forward_to_abot(self, token_data: dict) -> None:
+        """Forward token alert to a-bot via OpenClaw webhook."""
+        webhook_url = getattr(settings, "abot_webhook_url", None)
+        proxy_token = getattr(settings, "abot_proxy_token", None)
+        if not webhook_url or not proxy_token:
+            return
+
+        sym = token_data.get("base_symbol", "?")
+        chain = token_data.get("chain", "?").upper()
+        liq = token_data.get("liquidity_usd", 0)
+        mcap = token_data.get("market_cap", 0)
+        age = token_data.get("age_minutes")
+        dex = token_data.get("dex_url", "")
+        twitter = token_data.get("twitter_url", "")
+        followers = token_data.get("twitter_followers")
+        rug = token_data.get("rug_check")
+        flags = token_data.get("red_flags", [])
+
+        lines = [
+            f"🚀 New token alert: ${sym} on {chain}",
+            f"Liquidity: ${liq:,.0f} | MCap: ${mcap:,.0f}",
+        ]
+        if age is not None:
+            lines.append(f"Age: {age}m")
+        if twitter:
+            lines.append(f"Twitter: {twitter}" + (f" ({followers:,} followers)" if followers else ""))
+        if rug:
+            lines.append(f"Risk: {rug.get('risk_level', '?')} ({rug.get('score_normalised', '?')}/100)")
+        if flags:
+            lines.append("Red flags: " + ", ".join(f[0] for f in flags))
+        lines.append(f"DexScreener: {dex}")
+        lines.append("Analyze this token. Should we ape in or avoid? Give a quick verdict.")
+
+        message = "\n".join(lines)
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"{webhook_url}/hooks/agent",
+                    headers={
+                        "X-Proxy-Token": proxy_token,
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "message": message,
+                        "name": "TokenAlert",
+                        "deliver": True,
+                        "channel": "telegram",
+                    },
+                )
+                if resp.status_code == 202:
+                    logger.info(f"✅ Forwarded ${sym} alert to a-bot")
+                else:
+                    logger.warning(f"⚠️ a-bot webhook returned {resp.status_code}: {resp.text[:200]}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to forward to a-bot: {e}")
+
     async def handle_request(self, message: dict) -> dict:
         """Handle requests to the agent"""
         action = message.get("action", "status")

@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     telegram_chat_id: str | None = Field(default=None)
     enable_telegram: bool = Field(default=True)
 
+    # Webhook forwarder (OpenClaw a-bot)
+    abot_webhook_url: str | None = Field(default=None)
+    abot_proxy_token: str | None = Field(default=None)
+
     # Buyer
     solana_private_key: str | None = Field(default=None)
     evm_private_key: str | None = Field(default=None)

@@ -999,23 +999,43 @@ class LaunchMonitorAgent(BaseAgent):
 
         message = "\n".join(lines)
 
+        def build_hook_url(base: str, suffix: str) -> str:
+            base = base.rstrip("/")
+            for tail in ("/hooks/wake", "/hooks/agent"):
+                if base.endswith(tail):
+                    return base
+            if base.endswith("/hooks"):
+                return f"{base}/{suffix}"
+            return f"{base}/hooks/{suffix}"
+
+        candidates = [
+            (build_hook_url(webhook_url, "wake"), {"text": message, "mode": "now"}),
+            (build_hook_url(webhook_url, "agent"), {"message": message, "wakeMode": "now", "deliver": True}),
+        ]
+
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(
-                    f"{webhook_url}/hooks/wake",
-                    headers={
-                        "X-Proxy-Token": proxy_token,
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "text": message,
-                        "mode": "now",
-                    },
-                )
-                if resp.status_code in (200, 202):
-                    logger.info(f"✅ Forwarded ${sym} alert to a-bot")
-                else:
-                    logger.warning(f"⚠️ a-bot webhook returned {resp.status_code}: {resp.text[:200]}")
+                last_resp = None
+                for url, payload in candidates:
+                    resp = await client.post(
+                        url,
+                        headers={
+                            "X-Proxy-Token": proxy_token,
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    last_resp = resp
+                    if resp.status_code in (200, 202):
+                        logger.info(f"✅ Forwarded ${sym} alert to a-bot via {url}")
+                        return
+                    if resp.status_code not in (404, 405):
+                        break
+
+                if last_resp is not None:
+                    logger.warning(
+                        f"⚠️ a-bot webhook returned {last_resp.status_code}: {last_resp.text[:200]}"
+                    )
         except Exception as e:
             logger.warning(f"⚠️ Failed to forward to a-bot: {e}")
 

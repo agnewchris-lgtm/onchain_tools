@@ -807,14 +807,20 @@ class LaunchMonitorAgent(BaseAgent):
             logger.info(f"Processing {len(pairs)} candidate pairs for {chain}")
             
             found_count = 0
+            skip_counts: dict[str, int] = {}
+
+            def bump(reason: str) -> None:
+                skip_counts[reason] = skip_counts.get(reason, 0) + 1
             
             for i, pair in enumerate(pairs, 1):
                 pair_id = pair.get("pairAddress") or ""
                 if not pair_id:
+                    bump("missing_pair_id")
                     continue
                 
                 # Check if we've seen this token before (using Redis cache)
                 if await self._is_seen(chain, pair_id):
+                    bump("seen")
                     continue
                 
                 base_sym = (pair.get("baseToken", {}).get("symbol") or 
@@ -827,29 +833,36 @@ class LaunchMonitorAgent(BaseAgent):
                 if created_ms > 0:
                     age = now - created_ms
                     if age > lookback_ms:
+                        bump("too_old")
                         continue
                 elif i > self.config.TOP_N_FOR_NO_TIME:
+                    bump("no_timestamp")
                     continue
                 
                 # Liquidity check
                 liquidity = self._parse_liquidity(pair)
                 if liquidity < self.config.MIN_LIQUIDITY:
+                    bump("low_liquidity")
                     continue
                 
                 # Market cap check
                 market_cap = pair.get("fdv") or pair.get("marketCap") or 0
                 if self.config.MIN_MARKET_CAP > 0 and 0 < market_cap < self.config.MIN_MARKET_CAP:
+                    bump("below_min_mcap")
                     continue
                 if self.config.MAX_MARKET_CAP > 0 and market_cap > self.config.MAX_MARKET_CAP:
+                    bump("above_max_mcap")
                     continue
                 
                 # Website check
                 if self.config.REQUIRE_WEBSITE and not self._has_website(pair):
+                    bump("missing_website")
                     continue
                 
                 # Twitter check
                 twitter_url = self._has_twitter(pair)
                 if self.config.REQUIRE_TWITTER and not twitter_url:
+                    bump("missing_twitter")
                     continue
                 
                 # Fetch Twitter profile
@@ -864,6 +877,7 @@ class LaunchMonitorAgent(BaseAgent):
                         
                         if (self.config.MIN_TWITTER_FOLLOWERS > 0 and 
                             (followers is None or followers < self.config.MIN_TWITTER_FOLLOWERS)):
+                            bump("not_enough_followers")
                             continue
                 
                 # Passed all checks - publish new token alert
@@ -942,6 +956,10 @@ class LaunchMonitorAgent(BaseAgent):
                 logger.info(f"No new tokens found on {chain.upper()}")
             else:
                 logger.info(f"✨ Found {found_count} new token(s) on {chain.upper()}")
+
+            if skip_counts:
+                summary = ", ".join(f"{k}={v}" for k, v in sorted(skip_counts.items()))
+                logger.info(f"Skip summary for {chain.upper()}: {summary}")
         
         logger.info(f"✅ Scan finished: {datetime.now()}")
     

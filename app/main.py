@@ -25,6 +25,7 @@ async def run_gateway() -> None:
 
 
 async def run_agent(name: str) -> None:
+    configure_logging()
     agents_map = {
         "launch": LaunchMonitorAgent,
         "volume": VolumeBotAgent,
@@ -49,6 +50,7 @@ async def run_agent(name: str) -> None:
 
 async def run_orchestrator() -> None:
     """Run all stub agents in-process for convenience."""
+    configure_logging()
     launch = LaunchMonitorAgent()
     volume = VolumeBotAgent()
     twitter = TwitterScreenerAgent()

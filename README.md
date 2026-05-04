@@ -71,6 +71,10 @@ Edit `.env` file:
 - `REDIS_URL` - Redis connection string
 - `TWITTERAPI_KEY` - Get from https://twitterapi.io (optional)
 - `LOG_LEVEL` - DEBUG, INFO, WARNING, ERROR
+- `ABOT_WEBHOOK_URL` - optional Hermes/OpenClaw webhook for second-stage token research
+- `ABOT_PROXY_TOKEN` - optional proxy token sent as `X-Proxy-Token` to the webhook
+
+See `docs/hermes-alert-routing.md` for the WATCH/APE/BUY routing flow.
 
 Launch Monitor settings in `app/agents/launch_monitor/agent.py`:
 - `CHAINS` - Blockchains to monitor

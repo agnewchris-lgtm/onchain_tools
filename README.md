@@ -65,6 +65,39 @@ python -m app.main gateway
 - `POST /v1/volume/analysis` - Analyze volume patterns (stub)
 - `POST /v1/twitter/analysis` - Analyze Twitter sentiment (stub)
 
+## Local Docker deployment with private Hermes webhook
+
+If Hermes and the scanner run on this machine, the Hermes webhook does not need to be public. Run Hermes' webhook gateway on the host and let the Docker container call it through `host.docker.internal`.
+
+1. Enable/start the Hermes webhook gateway on the host:
+```bash
+hermes gateway setup
+# enable Webhooks, or set WEBHOOK_ENABLED=true / WEBHOOK_PORT=8644 in Hermes env
+hermes gateway run
+```
+
+2. Subscribe a route:
+```bash
+hermes webhook subscribe onchain-alerts
+```
+
+3. Configure scanner env:
+```bash
+cp .env.example .env
+# edit .env and set TWITTERAPI_KEY, Telegram settings, and ABOT_PROXY_TOKEN if needed
+ABOT_WEBHOOK_URL=http://host.docker.internal:8644/webhooks/onchain-alerts
+```
+
+4. Run scanner + Redis locally:
+```bash
+docker compose up -d --build
+```
+
+5. Check logs:
+```bash
+docker compose logs -f launch-monitor
+```
+
 ### Configuration
 
 Edit `.env` file:

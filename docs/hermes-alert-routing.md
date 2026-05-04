@@ -12,6 +12,31 @@
    - `WATCH`: DM Z privately and append to the monthly watchlist.
    - `APE` / `BUY`: DM Z, append to watchlist, and call Z via AgentOS.
 
+## Local Docker on the Hermes host (no public exposure)
+
+If the scanner runs in Docker on the same machine as Hermes, keep the Hermes gateway private and call it from the container through Docker's host gateway:
+
+```bash
+ABOT_WEBHOOK_URL=http://host.docker.internal:8644/webhooks/onchain-alerts
+```
+
+`docker-compose.yml` includes:
+
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
+
+So Linux Docker containers can resolve `host.docker.internal` to the host machine.
+
+Run:
+
+```bash
+cp .env.example .env
+# fill .env
+docker compose up -d --build
+```
+
 ## Environment
 
 ```bash

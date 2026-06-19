@@ -18,17 +18,37 @@ from ...services.buyer import BuyService, BuyResult
 
 
 class LaunchConfig:
-    """Configuration for launch monitor agent"""
-    CHAINS = ["bsc", "solana", "base"]
-    POLL_SECONDS = 30
-    LOOKBACK_HOURS = 1
-    MIN_LIQUIDITY = 6000
-    MIN_MARKET_CAP = 0
-    MAX_MARKET_CAP = 0
-    MIN_TWITTER_FOLLOWERS = 0
-    TOP_N_FOR_NO_TIME = 50
-    REQUIRE_TWITTER = True
-    REQUIRE_WEBSITE = False
+    """Configuration for the launch monitor agent.
+
+    Values are sourced from environment variables (via ``app.config.settings``)
+    so the monitor can be tuned without editing code. See ``.env.example`` for
+    the full list of ``LAUNCH_*`` variables. Defaults preserve prior behavior.
+    """
+
+    # Supported chains, in scan order. Each can be toggled off via .env.
+    _ALL_CHAINS = ["bsc", "solana", "base"]
+
+    def __init__(self) -> None:
+        self.CHAINS = self._resolve_enabled_chains()
+        self.POLL_SECONDS = settings.launch_poll_seconds
+        self.LOOKBACK_HOURS = settings.launch_lookback_hours
+        self.MIN_LIQUIDITY = settings.launch_min_liquidity
+        self.MIN_MARKET_CAP = settings.launch_min_market_cap
+        self.MAX_MARKET_CAP = settings.launch_max_market_cap
+        self.MIN_TWITTER_FOLLOWERS = settings.launch_min_twitter_followers
+        self.TOP_N_FOR_NO_TIME = settings.launch_top_n_for_no_time
+        self.REQUIRE_TWITTER = settings.launch_require_twitter
+        self.REQUIRE_WEBSITE = settings.launch_require_website
+
+    @classmethod
+    def _resolve_enabled_chains(cls) -> list[str]:
+        """Return the chains to scan, honoring per-chain .env toggles."""
+        toggles = {
+            "solana": settings.solana,
+            "base": settings.base,
+            "bsc": settings.bsc,
+        }
+        return [chain for chain in cls._ALL_CHAINS if toggles.get(chain, True)]
 
 
 class TelegramService:
@@ -533,6 +553,27 @@ class LaunchMonitorAgent(BaseAgent):
     async def on_start(self) -> None:
         logger.info("LaunchMonitorAgent starting...")
         logger.info(f"Using Redis cache with TTL: {self._cache_ttl}s ({self._cache_ttl/3600:.1f} hours)")
+        # Log the resolved (env-driven) configuration so it's clear what's active
+        disabled = [c for c in self.config._ALL_CHAINS if c not in self.config.CHAINS]
+        logger.info(
+            "Config: chains=%s%s | min_liquidity=$%s | min_mcap=%s | max_mcap=%s | "
+            "require_twitter=%s | require_website=%s | min_followers=%s | poll=%ss | lookback=%sh",
+            [c.upper() for c in self.config.CHAINS],
+            f" (disabled: {[c.upper() for c in disabled]})" if disabled else "",
+            f"{self.config.MIN_LIQUIDITY:,.0f}",
+            self.config.MIN_MARKET_CAP or "off",
+            self.config.MAX_MARKET_CAP or "off",
+            self.config.REQUIRE_TWITTER,
+            self.config.REQUIRE_WEBSITE,
+            self.config.MIN_TWITTER_FOLLOWERS or "off",
+            self.config.POLL_SECONDS,
+            self.config.LOOKBACK_HOURS,
+        )
+        if not self.config.CHAINS:
+            logger.warning(
+                "⚠️ No chains enabled — every chain is disabled in .env "
+                "(SOLANA/BASE/BSC). The monitor will not scan anything."
+            )
         # Start monitoring loop
         self._monitoring = True
         self._polling = True

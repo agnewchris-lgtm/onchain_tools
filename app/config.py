@@ -40,6 +40,26 @@ class Settings(BaseSettings):
     buy_amount_usd: float = Field(default=50.0)
     solana_rpc_url: str = Field(default="https://api.mainnet-beta.solana.com")
 
+    # ── Launch monitor ──────────────────────────────────────────────
+    # Per-chain toggles. All chains are monitored by default; set one to
+    # false in .env to skip it (e.g. BSC=false).
+    solana: bool = Field(default=True)
+    base: bool = Field(default=True)
+    bsc: bool = Field(default=True)
+
+    # Filtering thresholds. Defaults preserve prior hardcoded behavior.
+    launch_min_liquidity: float = Field(default=6000.0)
+    launch_min_market_cap: float = Field(default=0.0)  # 0 = no minimum
+    launch_max_market_cap: float = Field(default=0.0)  # 0 = no maximum
+    launch_min_twitter_followers: int = Field(default=0)  # 0 = no minimum
+    launch_require_twitter: bool = Field(default=True)
+    launch_require_website: bool = Field(default=False)
+
+    # Scan timing / behavior.
+    launch_poll_seconds: int = Field(default=30)
+    launch_lookback_hours: float = Field(default=1.0)
+    launch_top_n_for_no_time: int = Field(default=50)
+
     model_config = SettingsConfigDict(env_file=".env", env_prefix="", extra="allow")
 
 

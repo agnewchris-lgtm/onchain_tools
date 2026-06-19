@@ -149,11 +149,30 @@ Edit `.env` file:
 
 See `docs/hermes-alert-routing.md` for the WATCH/APE/BUY routing flow.
 
-Launch Monitor settings in `app/agents/launch_monitor/agent.py`:
-- `CHAINS` - Blockchains to monitor
-- `MIN_LIQUIDITY` - Minimum liquidity filter
-- `REQUIRE_TWITTER` - Require Twitter account
-- And more...
+#### Launch Monitor tuning (`.env`, no code edits required)
+
+These map to the `LaunchConfig` defaults in `app/agents/launch_monitor/agent.py` and
+can all be overridden via `.env` (defaults shown):
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SOLANA` | `true` | Scan Solana (set `false` to disable) |
+| `BASE` | `true` | Scan Base (set `false` to disable) |
+| `BSC` | `true` | Scan BSC (set `false` to disable) |
+| `LAUNCH_MIN_LIQUIDITY` | `6000` | Minimum pool liquidity (USD) to alert |
+| `LAUNCH_MIN_MARKET_CAP` | `0` | Minimum market cap (USD); `0` = off |
+| `LAUNCH_MAX_MARKET_CAP` | `0` | Maximum market cap (USD); `0` = off |
+| `LAUNCH_REQUIRE_TWITTER` | `true` | Require a Twitter/X account |
+| `LAUNCH_REQUIRE_WEBSITE` | `false` | Require a website |
+| `LAUNCH_MIN_TWITTER_FOLLOWERS` | `0` | Minimum follower count; `0` = off |
+| `LAUNCH_POLL_SECONDS` | `30` | Seconds between scans |
+| `LAUNCH_LOOKBACK_HOURS` | `1` | Max age of a pair to consider |
+| `LAUNCH_TOP_N_FOR_NO_TIME` | `50` | Top-liquidity pairs kept when no creation timestamp |
+
+All chains are enabled by default; disabling every chain logs a warning and the monitor scans nothing.
+
+> Smart-wallet activity filtering (e.g. "alert only if ≥N tracked wallets buy") is
+> not yet implemented — it would be added as a new filter step in `_scan_once`.
 
 ### Development
 

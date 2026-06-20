@@ -171,8 +171,30 @@ can all be overridden via `.env` (defaults shown):
 
 All chains are enabled by default; disabling every chain logs a warning and the monitor scans nothing.
 
-> Smart-wallet activity filtering (e.g. "alert only if ≥N tracked wallets buy") is
-> not yet implemented — it would be added as a new filter step in `_scan_once`.
+#### Smart-wallet activity filter (optional)
+
+Only alert on tokens that tracked "smart money" wallets currently hold. **Off by
+default** — list no wallets and the monitor behaves exactly as before. Implemented
+in `app/services/smart_wallets.py` and applied as a filter step in `_scan_once`.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `LAUNCH_SMART_WALLETS` | _(empty)_ | Solana and/or EVM (`0x…`) addresses, comma/space/newline separated. Empty = filter off |
+| `LAUNCH_MIN_SMART_WALLETS` | `0` | Min wallets that must hold the token. `0` → defaults to `1` once wallets are listed |
+| `LAUNCH_MIN_SMART_WALLET_PCT` | `0` | Also require ≥X% of tracked wallets (per chain). `0` = off |
+| `LAUNCH_SMART_WALLET_REFRESH_SECONDS` | `60` | How often to refresh wallet holdings |
+| `HELIUS_API_KEY` | _(empty)_ | Solana holdings source (required if you list Solana wallets) |
+| `ALCHEMY_API_KEY` | _(empty)_ | Base/BSC holdings source (required if you list EVM wallets) |
+
+How it works: each scan, the tracker refreshes the current token holdings of your
+wallets (Solana via Helius `getTokenAccountsByOwner`, EVM via Alchemy
+`alchemy_getTokenBalances` on Base + BNB) and builds a `chain → {token → wallets}`
+map. A candidate token is dropped unless enough of your wallets hold it. Address
+type (Solana vs EVM) is auto-detected; EVM wallets are checked on both Base and BSC.
+
+**Fail-open:** if a provider key is missing or a refresh errors, that chain is
+treated as "unknown" and tokens pass through (with a warning) — you never get
+silent zero-alerts. Need a Helius key? See the `helius` skill (signup ~1 USDC).
 
 ### Development
 

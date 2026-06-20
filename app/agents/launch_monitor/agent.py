@@ -15,6 +15,7 @@ from ..base import BaseAgent
 from ...config import settings
 from ...logging_config import logger
 from ...services.buyer import BuyService, BuyResult
+from ...services.smart_wallets import SmartWalletTracker
 
 
 class LaunchConfig:
@@ -240,7 +241,12 @@ class TelegramService:
                 hours = age // 60
                 mins = age % 60
                 message += f"⏰ <b>Age:</b> {hours}h {mins}m\n"
-        
+
+        # Smart-wallet holdings (only shown when the smart-wallet filter is active)
+        sw_count = token.get("smart_wallet_count")
+        if sw_count:
+            message += f"🧠 <b>Smart wallets holding:</b> {sw_count}\n"
+
         # Rug check section (Solana only)
         rug_check = token.get("rug_check")
         if rug_check:
@@ -545,6 +551,7 @@ class LaunchMonitorAgent(BaseAgent):
             chat_id=getattr(settings, "telegram_chat_id", None)
         )
         self.buyer = BuyService()
+        self.smart_wallets = SmartWalletTracker()
         self._monitoring = False
         self._polling = False
         # Redis SETEX requires an integer TTL, but LOOKBACK_HOURS may be a float
@@ -576,6 +583,7 @@ class LaunchMonitorAgent(BaseAgent):
                 "⚠️ No chains enabled — every chain is disabled in .env "
                 "(SOLANA/BASE/BSC). The monitor will not scan anything."
             )
+        logger.info(self.smart_wallets.describe())
         # Start monitoring loop
         self._monitoring = True
         self._polling = True
@@ -847,7 +855,10 @@ class LaunchMonitorAgent(BaseAgent):
         logger.info(f"Scan start: {datetime.now()}")
         now = int(datetime.now().timestamp() * 1000)
         lookback_ms = self.config.LOOKBACK_HOURS * 60 * 60 * 1000
-        
+
+        # Refresh smart-wallet holdings once per scan (no-op when disabled)
+        await self.smart_wallets.refresh_if_stale()
+
         for chain in self.config.CHAINS:
             logger.info(f"--- Chain: {chain.upper()} ---")
             pairs = await self._fetch_new_pairs(chain)
@@ -922,17 +933,36 @@ class LaunchMonitorAgent(BaseAgent):
                         if twitter_profile:
                             followers = twitter_profile.get("followers")
                         
-                        if (self.config.MIN_TWITTER_FOLLOWERS > 0 and 
+                        if (self.config.MIN_TWITTER_FOLLOWERS > 0 and
                             (followers is None or followers < self.config.MIN_TWITTER_FOLLOWERS)):
                             bump("not_enough_followers")
                             continue
-                
-                # Passed all checks - publish new token alert
-                found_count += 1
-                
+
+                # Smart-wallet activity filter (optional; off when no wallets configured).
+                # base_token_address is the SPL mint (Solana) or ERC-20 contract (EVM).
                 base_token = pair.get("baseToken", {})
                 quote_token = pair.get("quoteToken", {})
                 base_token_address = base_token.get("address", "")
+                smart_holders = None
+                if self.smart_wallets.enabled:
+                    if not base_token_address:
+                        # Can't match an address-less token against holdings; with the
+                        # filter explicitly on, drop it rather than leak it through.
+                        bump("no_token_address")
+                        continue
+                    smart_holders = await self.smart_wallets.holders_of(chain, base_token_address)
+                    passed, n_holders, required = self.smart_wallets.passes(chain, smart_holders)
+                    if not passed:
+                        bump("not_enough_smart_wallets")
+                        continue
+                    if n_holders >= 0:
+                        logger.info(
+                            f"🧠 {base_sym}: {n_holders}/{required} smart wallet(s) holding on {chain}"
+                        )
+
+                # Passed all checks - publish new token alert
+                found_count += 1
+                
                 pair_address = pair.get("pairAddress") or pair_id
 
                 # Fetch rug check for Solana tokens
@@ -967,6 +997,8 @@ class LaunchMonitorAgent(BaseAgent):
                     "twitter_profile": twitter_profile,
                     "rug_check": rug_summary,
                     "red_flags": red_flags,
+                    "smart_wallet_count": len(smart_holders) if smart_holders is not None else None,
+                    "smart_wallet_holders": sorted(smart_holders) if smart_holders else [],
                     "dex_url": pair.get("url") or f"https://dexscreener.com/{chain}/{pair_id}",
                     "created_at": datetime.fromtimestamp(created_ms / 1000).isoformat() if created_ms else None,
                     "age_minutes": int((now - created_ms) / 60000) if created_ms else None,
@@ -1030,11 +1062,15 @@ class LaunchMonitorAgent(BaseAgent):
         followers = token_data.get("twitter_followers")
         rug = token_data.get("rug_check")
         flags = token_data.get("red_flags", []) or []
+        sw_count = token_data.get("smart_wallet_count")
+        sw_holders = token_data.get("smart_wallet_holders", []) or []
 
         summary_lines = [
             f"🚀 New token alert: ${sym} ({name}) on {chain.upper()}",
             f"Liquidity: ${liq:,.0f} | MCap: ${mcap:,.0f}",
         ]
+        if sw_count:
+            summary_lines.append(f"Smart wallets holding: {sw_count}")
         if volume is not None:
             summary_lines.append(f"Volume 24h: ${float(volume):,.0f}")
         if age is not None:
@@ -1101,6 +1137,10 @@ class LaunchMonitorAgent(BaseAgent):
                 "risk": {
                     "rug_check": rug,
                     "red_flags": flags,
+                },
+                "smart_wallets": {
+                    "count": sw_count,
+                    "holders": sw_holders,
                 },
             },
             "raw_token": token_data,

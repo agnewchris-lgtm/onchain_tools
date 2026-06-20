@@ -60,6 +60,17 @@ class Settings(BaseSettings):
     launch_lookback_hours: float = Field(default=1.0)
     launch_top_n_for_no_time: int = Field(default=50)
 
+    # Smart-wallet activity filter (optional; OFF unless wallets are listed).
+    # Comma/space/newline separated Solana and/or EVM (0x…) addresses.
+    launch_smart_wallets: str = Field(default="")
+    launch_min_smart_wallets: int = Field(default=0)       # ≥N wallets must hold; 0 -> defaults to 1 when wallets set
+    launch_min_smart_wallet_pct: float = Field(default=0.0)  # ≥X% of tracked wallets must hold; 0 = off
+    launch_smart_wallet_refresh_seconds: int = Field(default=60)
+
+    # Holdings data providers for the smart-wallet filter.
+    helius_api_key: str | None = Field(default=None)   # Solana holdings
+    alchemy_api_key: str | None = Field(default=None)  # Base/BSC holdings
+
     model_config = SettingsConfigDict(env_file=".env", env_prefix="", extra="allow")
 
 
